@@ -2,24 +2,45 @@
 #include <GLFW/glfw3.h>
 #include <compile_shader_program.h>
 #include <iostream>
+#include <cmath>
+
+using namespace std;
 
 const char *vertexShaderSource = R"(#version 330 core
 
 layout (location = 0) in vec3 aPos;
+layout (location = 1) in vec2 aUV;
+layout (location = 2) in vec3 aNormal;
+
+uniform mat4 modelToWorld; //model
+uniform mat4 worldToCamera; //view
+uniform mat4 projection;
+uniform mat4 toClippingSpace; //clip
+
+out vec3 pos;
+out vec2 uv;
+out vec3 normal;
 
 void main()
 {
-   gl_Position = vec4(aPos/2, 1.0);
+   gl_Position = toClippingSpace * projection * worldToCamera * modelToWorld * vec4(aPos, 1.0);
+   pos = aPos;
+   uv = aUV;
+   normal = aNormal;
 }
 )";
 
 const char *fragmentShaderTealSource = R"(#version 330 core
 
+in vec3 pos;
+in vec2 uv;
+in vec3 normal;
+
 out vec4 FragColor;
 
 void main()
 {
-   FragColor = vec4(0.0f, 0.75f, 0.85f, 1.0f);
+   FragColor = vec4((pos.x+1)/2, (pos.y+1)/2, 0.0f, 1.0f);
 }
 )";
 
@@ -41,7 +62,7 @@ int main()
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
     glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
 
-    GLFWwindow *window = glfwCreateWindow(800, 600, "CSCI 4620", NULL, NULL);
+    GLFWwindow *window = glfwCreateWindow(640, 480, "CSCI 4620", NULL, NULL);
 
     if (!window)
     {
@@ -61,9 +82,13 @@ int main()
     unsigned int shaderProgramTriangle = compileShaderProgram(vertexShaderSource, fragmentShaderTealSource);
 
     float triangleVertices[] = {
-        -.9f, -.9f, 0.0f, // Vertex one
-        .9f,  -.9f, 0.0f, // Vertex two
-        .9f,  .9f,  0.0f,  // Vertex three
+        /*position*/-.9f, -.9f, -20.0f, /* uvs */ 0, 0, /*normals*/ 0, 0, 1,// Vertex one
+        /*position*/.9f,  -.9f, -20.0f, /* uvs */ 1, 0, /*normals*/ 0, 0, 1,// Vertex two
+        /*position*/.9f,  .9f,  -20.0f, /* uvs */ 1, 1, /*normals*/ 0, 0, 1,// Vertex three
+        
+        /*position*/-.9f, -.9f, -20.0f, /* uvs */ 0, 0, /*normals*/ 0, 0, 1,// Vertex one
+        /*position*/-.9f,  .9f, -20.0f, /* uvs */ 0, 1, /*normals*/ 0, 0, 1,// Vertex two
+        /*position*/.9f,  .9f,  -20.0f, /* uvs */ 1, 1, /*normals*/ 0, 0, 1,// Vertex three
     };
 
     unsigned int VAO_Triangle, VBO_Triangle;
@@ -72,9 +97,58 @@ int main()
     glBindBuffer(GL_ARRAY_BUFFER, VBO_Triangle);
     glBufferData(GL_ARRAY_BUFFER, sizeof(triangleVertices), triangleVertices, GL_STATIC_DRAW);
     glBindVertexArray(VAO_Triangle);
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void *)0);
+    //positions
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void *)0);
     glEnableVertexAttribArray(0);
-    
+    //uvs
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void *)(3*sizeof(float)));
+    glEnableVertexAttribArray(1);
+    //normals
+    glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, 8 * sizeof(float), (void *)(5*sizeof(float)));
+    glEnableVertexAttribArray(2);
+
+    int modelToWorldPointer = glGetUniformLocation(shaderProgramTriangle, "modelToWorld");
+    int worldToCameraPointer = glGetUniformLocation(shaderProgramTriangle, "worldToCamera");
+    int projectionPointer = glGetUniformLocation(shaderProgramTriangle, "projection");
+    int toClippingSpacePointer = glGetUniformLocation(shaderProgramTriangle, "toClippingSpace");
+
+
+    float nearPlane = .1f;
+    float farPlane = 100.0f;
+
+    float FOV = 45;
+    float radians = FOV/360 * 2 * 3.14159265f;
+    float aspectRatio = 800/600.0f;
+    float top = nearPlane * tan(radians/2);
+    float right = top * aspectRatio;
+
+    float modelToWorld[] = {
+        1, 0, 0, 10, //
+        0, 1, 0, 0, //
+        0, 0, 1, 0, //
+        0, 0, 0, 1, //
+    };
+
+    float worldToCamera[] = {
+        1, 0, 0, -10, //
+        0, 1, 0, 0, //
+        0, 0, 1, 0, //
+        0, 0, 0, 1, //
+    };
+
+    float projection[] = {
+        1, 0, 0, 0, //
+        0, 1, 0, 0, //
+        0, 0, (nearPlane + farPlane), nearPlane*farPlane, //
+        0, 0, -1, 0, //
+    };
+
+    float toClippingSpace[] = {
+        nearPlane/right, 0, 0, 0, //
+        0, nearPlane/top, 0, 0, //
+        0, 0, -2/(farPlane-nearPlane), -(farPlane+nearPlane)/(farPlane-nearPlane), //
+        0, 0, 0, 1, //
+    };
 
     while (!glfwWindowShouldClose(window))
     {
@@ -82,8 +156,15 @@ int main()
         glClear(GL_COLOR_BUFFER_BIT);
 
         glUseProgram(shaderProgramTriangle);
+
+        glUniformMatrix4fv(modelToWorldPointer, 1, GL_TRUE, modelToWorld);
+        glUniformMatrix4fv(worldToCameraPointer, 1, GL_TRUE, worldToCamera);
+        glUniformMatrix4fv(projectionPointer, 1, GL_TRUE, projection);
+        glUniformMatrix4fv(toClippingSpacePointer, 1, GL_TRUE, toClippingSpace);
+
+
         glBindVertexArray(VAO_Triangle);
-        glDrawArrays(GL_TRIANGLES, 0, 3);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
 
         glfwSwapBuffers(window);
         glfwPollEvents();
